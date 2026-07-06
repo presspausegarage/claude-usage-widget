@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude usage</title>
+<style>
+  :root{
+    --bg:#1f1e1b; --card:#2a2825; --line:#3a3733;
+    --text:#ece9e2; --dim:#9d968a; --accent:#d97757;
+    --ok:#6aa86f; --warn:#d9a441; --hot:#cf5b56;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:14px/1.4 "Segoe UI",system-ui,sans-serif;padding:10px}
+  .win{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  .cardhead{display:flex;align-items:center;gap:7px;margin-bottom:9px}
+  .cardhead .mark{color:var(--accent);font-size:16px}
+  .cardhead h1{font-size:13.5px;font-weight:600;flex:1}
+  .cardhead button{background:none;border:1px solid var(--line);color:var(--dim);border-radius:6px;width:22px;height:22px;cursor:pointer;font-size:12px}
+  .cardhead button:hover{color:var(--text);border-color:var(--dim)}
+  #banner{display:none;background:#4a3320;border:1px solid #7a5a2e;color:#e8c88a;border-radius:8px;padding:6px 9px;font-size:12px;margin-bottom:8px}
+  #empty{display:none;color:var(--dim);text-align:center;padding:10px;font-size:12.5px}
+  .top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+  .label{font-size:12.5px;color:var(--dim)}
+  .pct{font-size:19px;font-weight:650;font-variant-numeric:tabular-nums}
+  .bar{height:7px;background:#171614;border-radius:99px;overflow:hidden;margin-bottom:6px}
+  .bar i{display:block;height:100%;border-radius:99px;transition:width .4s}
+  .statusline{display:flex;justify-content:space-between;font-size:11.5px;color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="win">
+  <div class="cardhead">
+    <span class="mark">&#10035;</span>
+    <h1>Claude usage</h1>
+    <button id="refresh" title="Refresh now">&#8635;</button>
+    <button id="menu" title="Menu">&#9776;</button>
+  </div>
+  <div id="banner"></div>
+  <div id="empty">No usage data yet.</div>
+  <div id="row" style="display:none">
+    <div class="top"><span class="label">Session · 5-hour</span><span class="pct" id="pct"></span></div>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="statusline"><span id="resetin"></span><span id="refreshed"></span></div>
+  </div>
+</div>
+<script>
+let state = null;
+
+function relShort(ms) {
+  if (ms <= 0) return 'now';
+  const m = Math.floor(ms / 60000), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60), mm = m % 60;
+  return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${mm}m` : `${Math.max(mm, 1)}m`;
+}
+const barColor = p => p >= 80 ? 'var(--hot)' : p >= 50 ? 'var(--warn)' : 'var(--ok)';
+
+function render() {
+  const banner = document.getElementById('banner');
+  const empty = document.getElementById('empty');
+  const row = document.getElementById('row');
+  const now = Date.now();
+
+  banner.style.display = state && state.error ? 'block' : 'none';
+  if (state && state.error) banner.textContent = state.error;
+
+  const v = state && state.data && state.data.five_hour;
+  const has = v && typeof v === 'object' && v.utilization !== undefined && v.utilization !== null;
+  row.style.display = has ? 'block' : 'none';
+  empty.style.display = has ? 'none' : 'block';
+
+  if (has) {
+    const p = Math.max(0, Math.min(100, Number(v.utilization) || 0));
+    document.getElementById('pct').textContent = `${Math.round(p)}%`;
+    const bar = document.getElementById('bar');
+    bar.style.width = p + '%';
+    bar.style.background = barColor(p);
+
+    const resetIn = document.getElementById('resetin');
+    if (v.resets_at) {
+      const t = new Date(v.resets_at);
+      resetIn.textContent = isNaN(t) ? '' : `Reset in: ${relShort(t - now)}`;
+    } else {
+      resetIn.textContent = '';
+    }
+  }
+
+  const refreshed = document.getElementById('refreshed');
+  if (state && state.fetched_at) {
+    const ageMin = Math.round((now - new Date(state.fetched_at)) / 60000);
+    const ageText = ageMin < 1 ? 'just now' : ageMin === 1 ? '1m ago' : `${ageMin}m ago`;
+    refreshed.textContent = `↻ ${ageText}`;
+    refreshed.style.color = state.error ? 'var(--hot)' : '';
+  } else {
+    refreshed.textContent = '↻ —';
+    refreshed.style.color = '';
+  }
+}
+
+const requestedInterval = parseInt(new URLSearchParams(location.search).get('interval'), 10);
+const intervalSec = Number.isFinite(requestedInterval) && requestedInterval > 0 ? requestedInterval : 60;
+
+async function poll() {
+  try {
+    const r = await fetch(`/data?maxAge=${intervalSec}`, {cache: 'no-store'});
+    state = await r.json();
+  } catch (e) {
+    state = Object.assign({}, state, {error: 'Widget server unreachable — rerun launch-widget.cmd'});
+  }
+  render();
+}
+
+document.getElementById('refresh').onclick = poll;
+document.getElementById('menu').onclick = () => window.chrome?.webview?.postMessage('menu');
+// A native message filter on the host side can see clicks on real controls
+// (like the drag strip above this WebView2) but not clicks that land on this
+// rendered content itself - the browser process handles those, and never
+// surfaces a Win32 message for it. So: tell the host directly whenever
+// anything here is clicked, so it can close the menu if one's open.
+document.addEventListener('click', () => window.chrome?.webview?.postMessage('click'), true);
+poll();
+setInterval(poll, intervalSec * 1000);
+setInterval(render, 15000);  // keep the countdown fresh between polls
+</script>
+</body>
+</html>

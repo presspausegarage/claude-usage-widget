@@ -1,0 +1,8 @@
+bin/
+obj/
+.vs/
+*.user
+settings.json
+
+# Obsidian vault tooling (Kanban etc.) — on disk for the vault, not part of the code repo
+_meta/
