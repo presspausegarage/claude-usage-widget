@@ -33,7 +33,7 @@ public class OverlayForm : Form
 {
     const string WidgetUrl = "http://localhost:8484/";
     static readonly string ScriptPath = Path.Combine(AppContext.BaseDirectory, "usage-widget.ps1");
-    const int Margin = 16;
+    const int CornerMargin = 16; // avoid shadowing Control.Margin
     static readonly int[] PollChoices = { 30, 60, 120, 300 };
 
     static readonly Color GripIdle = Color.FromArgb(58, 55, 51);   // matches widget.html's --line
@@ -94,7 +94,7 @@ public class OverlayForm : Form
     Point DefaultLocation()
     {
         var area = Screen.PrimaryScreen!.WorkingArea;
-        return new Point(area.Right - Width - Margin, area.Bottom - Height - Margin);
+        return new Point(area.Right - Width - CornerMargin, area.Bottom - Height - CornerMargin);
     }
 
     Point RestoredOrDefaultLocation()
