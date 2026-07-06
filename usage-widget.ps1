@@ -67,6 +67,7 @@ function Get-FriendlyError($err) {
         401 { 'Token expired or invalid (401). Run anything in Claude Code - it refreshes the token file - and this recovers on its own.' }
         403 { 'Forbidden (403) - this token cannot read the usage endpoint.' }
         429 { 'Rate-limited by Anthropic (429). Showing last known data; retries every minute.' }
+        { $_ -ge 500 } { "Anthropic's usage endpoint is temporarily unavailable ($status). Showing last known data; retries on the next interval." }
         default { $err.Exception.Message }
     }
 }
