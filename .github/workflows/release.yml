@@ -12,7 +12,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "8.0.x"
       - run: >
@@ -27,6 +27,6 @@ jobs:
       # the .exe silently drops them, leaving the exe unable to find its
       # server script on a fresh machine. Ship all three together.
       - run: Compress-Archive -Path publish/AlwaysOnTopWidget.exe, publish/usage-widget.ps1, publish/widget.html -DestinationPath claude-usage-widget-win-x64.zip
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: claude-usage-widget-win-x64.zip
