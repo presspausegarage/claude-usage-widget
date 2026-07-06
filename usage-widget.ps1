@@ -118,10 +118,71 @@ if ($Once) {
 
 # ---- server -----------------------------------------------------------------
 
-$script:cache     = $null                    # last good API payload
-$script:cacheOkAt = [datetime]::MinValue     # when it was fetched
-$script:triedAt   = [datetime]::MinValue     # last attempt (success or not)
-$script:lastError = $null
+$script:cache          = $null                # last good API payload
+$script:cacheOkAt      = [datetime]::MinValue # when it was fetched
+$script:triedAt        = [datetime]::MinValue # last attempt (success or not)
+$script:lastError      = $null
+$script:lastHealAttempt = [datetime]::MinValue
+$HealCooldownSeconds   = 120   # don't hammer `claude -p` if something's persistently broken
+
+function Invoke-TokenHeal {
+    <#
+    On a 401, `claude --version` and `claude auth status` both leave an
+    expired token untouched - only a real authenticated call refreshes it
+    (confirmed by testing). Returns a specific error message if the account
+    isn't logged in at all (nothing to heal), or $null if a refresh attempt
+    was made - or skipped via cooldown - and the caller should just retry.
+    #>
+    $now = [datetime]::UtcNow
+    if (($now - $script:lastHealAttempt).TotalSeconds -lt $HealCooldownSeconds) { return $null }
+    $script:lastHealAttempt = $now
+
+    $auth = $null
+    try { $auth = (& claude auth status --json 2>$null) | ConvertFrom-Json } catch { }
+    if (-not $auth -or -not $auth.loggedIn) {
+        return 'Not logged in to Claude Code. Run "claude login" in a terminal, then this recovers on its own.'
+    }
+
+    # Trivial prompt, just to force the refresh side effect - spends a sliver
+    # of the same session-usage quota this widget displays, not a separate
+    # metered API cost (for subscription auth; API-key users would see a
+    # tiny real charge here).
+    & claude -p "hi" *> $null
+    return $null
+}
+
+function Update-UsageCache {
+    try {
+        $script:cache     = Get-Usage
+        $script:cacheOkAt = [datetime]::UtcNow
+        $script:lastError = $null
+        return
+    } catch {
+        $firstErr = $_
+        $status = $null
+        if ($firstErr.Exception -is [Microsoft.PowerShell.Commands.HttpResponseException]) {
+            $status = [int]$firstErr.Exception.Response.StatusCode
+        }
+
+        if ($status -eq 401) {
+            $override = Invoke-TokenHeal
+            if ($override) {
+                $script:lastError = $override
+                return
+            }
+            try {
+                $script:cache     = Get-Usage
+                $script:cacheOkAt = [datetime]::UtcNow
+                $script:lastError = $null
+            } catch {
+                $script:lastError = Get-FriendlyError $_
+            }
+            return
+        }
+
+        $script:lastError = Get-FriendlyError $firstErr
+    }
+}
 
 function Get-DataJson([int]$MaxAge = $CacheSeconds) {
     # Client-adjustable polling rate (widget.html's interval setting), but never
@@ -132,13 +193,7 @@ function Get-DataJson([int]$MaxAge = $CacheSeconds) {
     $now = [datetime]::UtcNow
     if (($now - $script:triedAt).TotalSeconds -ge $effectiveMaxAge) {
         $script:triedAt = $now
-        try {
-            $script:cache     = Get-Usage
-            $script:cacheOkAt = $now
-            $script:lastError = $null
-        } catch {
-            $script:lastError = Get-FriendlyError $_
-        }
+        Update-UsageCache
     }
     [ordered]@{
         ok         = ($null -ne $script:cache)

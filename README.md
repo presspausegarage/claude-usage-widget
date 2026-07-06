@@ -64,9 +64,14 @@ wrong. Click "More info" → "Run anyway".
 - The usage endpoint is undocumented and rate-limited server-side. Polling
   intervals below 15 seconds are clamped up to 15s regardless of what you pick,
   to avoid tripping that.
-- **401** in the card = your OAuth token expired. Run anything in Claude Code
-  (it refreshes the token file) and the widget recovers on its own within a
-  minute.
+- **401** in the card = your OAuth token expired. The widget tries to self-heal:
+  it checks `claude auth status` and, if you're logged in, fires a trivial
+  `claude -p` prompt to force a token refresh (this spends a sliver of your
+  session-usage quota under a Claude subscription — a tiny real API charge if
+  you're on pay-per-token API-key auth instead), then retries once. If you're
+  not logged in at all, the card tells you to run `claude login` instead of
+  attempting a refresh that can't work. Self-heal is cooldown-limited to once
+  every 2 minutes so a persistently broken token doesn't retry every poll.
 - **429** = Anthropic rate-limited the poll; the widget keeps showing the last
   known data and retries on the next interval.
 
