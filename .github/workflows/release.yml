@@ -21,6 +21,12 @@ jobs:
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
           -o publish
+      # usage-widget.ps1 and widget.html are separate Content files the exe
+      # launches at its own AppContext.BaseDirectory - `dotnet publish` copies
+      # them into publish/ alongside the exe, but a release asset list of just
+      # the .exe silently drops them, leaving the exe unable to find its
+      # server script on a fresh machine. Ship all three together.
+      - run: Compress-Archive -Path publish/AlwaysOnTopWidget.exe, publish/usage-widget.ps1, publish/widget.html -DestinationPath claude-usage-widget-win-x64.zip
       - uses: softprops/action-gh-release@v2
         with:
-          files: publish/AlwaysOnTopWidget.exe
+          files: claude-usage-widget-win-x64.zip

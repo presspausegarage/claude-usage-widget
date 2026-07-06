@@ -35,8 +35,11 @@ into place once and left there.
 
 ## Install
 
-**Download** the latest release from the [Releases page](../../releases) — a
-self-contained `.exe`, no separate .NET install needed.
+**Download** `claude-usage-widget-win-x64.zip` from the [Releases page](../../releases)
+and extract it somewhere — it contains the self-contained `.exe` plus its
+`usage-widget.ps1`/`widget.html` companions, which must stay next to the exe.
+No separate .NET install needed. (Don't download just the exe by itself — it
+needs those two files alongside it to find its data server.)
 
 **Or build from source**: open `AlwaysOnTopWidget/AlwaysOnTopWidget.csproj` in
 Visual Studio 2022+ with the **.NET desktop development** workload, then Build
