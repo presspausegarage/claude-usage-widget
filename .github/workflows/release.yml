@@ -27,6 +27,12 @@ jobs:
       # the .exe silently drops them, leaving the exe unable to find its
       # server script on a fresh machine. Ship all three together.
       - run: Compress-Archive -Path publish/AlwaysOnTopWidget.exe, publish/usage-widget.ps1, publish/widget.html -DestinationPath claude-usage-widget-win-x64.zip
+      # dotnet build/publish succeeding doesn't prove the shipped zip actually
+      # works - that gap already let a release-breaking packaging bug through
+      # twice. Extracts the real zip into an empty folder and confirms the
+      # exe launches, its server binds, and it serves data before the
+      # release goes out.
+      - run: pwsh -File scripts/smoke-test.ps1 -ZipPath claude-usage-widget-win-x64.zip
       - uses: softprops/action-gh-release@v3
         with:
           files: claude-usage-widget-win-x64.zip
