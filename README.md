@@ -4,6 +4,8 @@ A small always-on-top card that shows your Claude session usage (5-hour window),
 without opening claude.ai. Sits in the bottom-right corner of your screen, dragged
 into place once and left there.
 
+![Claude Usage Widget showing session usage at 34%, resetting in 4h 35m](docs/screenshot.png)
+
 > **Unofficial, unaffiliated with Anthropic.** This reads usage data from an
 > **undocumented** endpoint (the same one Claude Code's own `/usage` command uses
 > internally) — it could change or break without notice. If it stops working,
