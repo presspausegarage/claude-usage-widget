@@ -22,13 +22,21 @@ public class Settings
                 if (loaded != null) return loaded;
             }
         }
-        catch { /* missing/corrupt settings file -> fall back to defaults below */ }
+        catch (Exception ex)
+        {
+            // missing/corrupt settings file -> fall back to defaults below
+            Logger.Warn($"Settings.Load: failed to read/parse {FilePath}: {ex.Message}");
+        }
         return new Settings();
     }
 
     public void Save()
     {
         try { File.WriteAllText(FilePath, JsonSerializer.Serialize(this)); }
-        catch { /* best-effort; a failed save just means next launch uses the last-good settings */ }
+        catch (Exception ex)
+        {
+            // best-effort; a failed save just means next launch uses the last-good settings
+            Logger.Warn($"Settings.Save: failed to write {FilePath}: {ex.Message}");
+        }
     }
 }

@@ -46,8 +46,14 @@ public class OverlayForm : Form
     readonly List<ToolStripMenuItem> pollItems = new();
     ContextMenuStrip menu = null!;
 
+    // The pwsh server child this instance spawned (if any) - tracked so it
+    // can be torn down on FormClosing instead of orphaning past app close.
+    Process? serverProcess;
+    JobObject? serverJob;
+
     public OverlayForm()
     {
+        Logger.Info($"OverlayForm: initializing (TopMost={settings.TopMost}, PollSeconds={settings.PollSeconds}, saved position=({settings.X},{settings.Y}))");
         FormBorderStyle = FormBorderStyle.None;
         TopMost = settings.TopMost;
         ShowInTaskbar = false;
@@ -87,6 +93,7 @@ public class OverlayForm : Form
         Controls.Add(grip);
 
         Load += OverlayForm_Load;
+        FormClosing += OverlayForm_FormClosing;
     }
 
     static string FormatInterval(int seconds) => seconds < 60 ? $"{seconds}s" : $"{seconds / 60} min";
@@ -101,11 +108,26 @@ public class OverlayForm : Form
     {
         if (settings.X == int.MinValue || settings.Y == int.MinValue) return DefaultLocation();
         var candidate = new Point(settings.X, settings.Y);
-        var bounds = new Rectangle(candidate, Size);
         // Fall back to the default corner if the saved position is off any
-        // currently-connected monitor (e.g. a monitor got unplugged).
-        return Screen.AllScreens.Any(s => s.WorkingArea.IntersectsWith(bounds)) ? candidate : DefaultLocation();
+        // currently-connected monitor (e.g. a monitor got unplugged or the
+        // layout was reconfigured since the position was saved).
+        if (IsOnScreen(candidate))
+        {
+            return candidate;
+        }
+        Logger.Warn($"RestoredOrDefaultLocation: saved position ({candidate.X},{candidate.Y}) is off every current monitor; falling back to default corner.");
+        return DefaultLocation();
     }
+
+    // Real bounds check against the monitor layout as it exists right now
+    // (Screen.AllScreens), used both when restoring a saved position and -
+    // critically - before persisting one. A previous release only checked
+    // this on load, so a bad value (e.g. X:2153 on a since-reconfigured
+    // layout that topped out at 2048) could still be written to
+    // settings.json in the first place and strand the window off-screen on
+    // the next launch. Checking here too closes that gap.
+    bool IsOnScreen(Point location) =>
+        Screen.AllScreens.Any(s => s.WorkingArea.IntersectsWith(new Rectangle(location, Size)));
 
     void ToggleAlwaysOnTop(object? sender, EventArgs e)
     {
@@ -113,6 +135,7 @@ public class OverlayForm : Form
         TopMost = settings.TopMost;
         alwaysOnTopItem.Checked = settings.TopMost;
         settings.Save();
+        Logger.Info($"ToggleAlwaysOnTop: now {settings.TopMost}");
     }
 
     void SetPollSeconds(int seconds)
@@ -120,15 +143,31 @@ public class OverlayForm : Form
         settings.PollSeconds = seconds;
         foreach (var item in pollItems) item.Checked = item.Text == FormatInterval(seconds);
         settings.Save();
+        Logger.Info($"SetPollSeconds: now {seconds}s");
         Navigate();
     }
 
     void ResetPosition()
     {
         Location = DefaultLocation();
+        SavePosition("reset to default corner");
+    }
+
+    // Only ever persists a position that actually intersects a currently
+    // connected monitor - see IsOnScreen. A rejected save just keeps
+    // whatever was last known-good in settings.json rather than writing a
+    // value that could strand the window off-screen on the next launch.
+    void SavePosition(string context)
+    {
+        if (!IsOnScreen(Location))
+        {
+            Logger.Warn($"SavePosition: refusing to persist off-screen position ({Location.X},{Location.Y}) [{context}]; keeping last saved ({settings.X},{settings.Y}).");
+            return;
+        }
         settings.X = Location.X;
         settings.Y = Location.Y;
         settings.Save();
+        Logger.Info($"SavePosition: saved ({settings.X},{settings.Y}) [{context}]");
     }
 
     // WebView2 renders through its own composited surface, which a manual
@@ -151,7 +190,12 @@ public class OverlayForm : Form
 
     async void OverlayForm_Load(object? sender, EventArgs e)
     {
-        if (!await EnsureServerRunning()) return; // pwsh missing — friendly message already shown, just don't navigate
+        Logger.Info("OverlayForm_Load: starting");
+        if (!await EnsureServerRunning())
+        {
+            Logger.Error("OverlayForm_Load: EnsureServerRunning failed; not navigating.");
+            return; // pwsh missing — friendly message already shown, just don't navigate
+        }
         await webView.EnsureCoreWebView2Async();
         // widget.html posts 'menu' from the hamburger button (which can't call
         // into this native ContextMenuStrip directly) and 'click' on every
@@ -169,21 +213,29 @@ public class OverlayForm : Form
         Navigate();
     }
 
-    void Navigate() => webView.CoreWebView2?.Navigate($"{WidgetUrl}?interval={settings.PollSeconds}");
+    void Navigate()
+    {
+        Logger.Info($"Navigate: interval={settings.PollSeconds}");
+        webView.CoreWebView2?.Navigate($"{WidgetUrl}?interval={settings.PollSeconds}");
+    }
 
-    static async Task<bool> EnsureServerRunning()
+    async Task<bool> EnsureServerRunning()
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
         try
         {
             var resp = await http.GetAsync(WidgetUrl + "data");
-            if (resp.Headers.Contains("X-Claude-Usage-Widget")) return true; // already running
+            if (resp.Headers.Contains("X-Claude-Usage-Widget"))
+            {
+                Logger.Info("EnsureServerRunning: server already responding on " + WidgetUrl + " (not started by this instance, so not tracked for shutdown).");
+                return true; // already running
+            }
         }
         catch { /* not running yet — start it below */ }
 
         try
         {
-            Process.Start(new ProcessStartInfo
+            serverProcess = Process.Start(new ProcessStartInfo
             {
                 FileName = "pwsh",
                 Arguments = $"-NoProfile -File \"{ScriptPath}\" -NoBrowser",
@@ -191,9 +243,24 @@ public class OverlayForm : Form
                 CreateNoWindow = true,
                 UseShellExecute = false,
             });
+
+            if (serverProcess != null)
+            {
+                Logger.Info($"EnsureServerRunning: spawned pwsh server, PID {serverProcess.Id}");
+                // Belt-and-suspenders: assigning to a kill-on-close Job Object
+                // means the child dies with us even on a crash/taskkill, not
+                // just the clean-exit path handled in FormClosing below.
+                serverJob = new JobObject();
+                serverJob.AddProcess(serverProcess.Handle);
+            }
+            else
+            {
+                Logger.Warn("EnsureServerRunning: Process.Start returned null for pwsh.");
+            }
         }
-        catch (Win32Exception)
+        catch (Win32Exception ex)
         {
+            Logger.Error($"EnsureServerRunning: pwsh not found on PATH ({ex.Message})");
             MessageBox.Show(
                 "Couldn't find PowerShell 7 (pwsh) on PATH, which this app needs to run its data server.\n\n" +
                 "Install it from https://aka.ms/powershell, then relaunch.",
@@ -205,6 +272,41 @@ public class OverlayForm : Form
         // Give the HttpListener a moment to bind before the WebView2 navigates.
         await Task.Delay(1500);
         return true;
+    }
+
+    // Closing the widget used to leave its spawned server running forever,
+    // still listening on port 8484, because nothing ever tore it down. Kill
+    // it explicitly here (covers the normal clean-exit case); the Job
+    // Object set up in EnsureServerRunning covers the crash/kill case where
+    // this handler never runs at all.
+    void OverlayForm_FormClosing(object? sender, FormClosingEventArgs e)
+    {
+        Logger.Info("OverlayForm_FormClosing: shutting down");
+        TryKillServerProcess();
+    }
+
+    void TryKillServerProcess()
+    {
+        if (serverProcess == null) return;
+        try
+        {
+            if (!serverProcess.HasExited)
+            {
+                serverProcess.Kill(entireProcessTree: true);
+                Logger.Info($"TryKillServerProcess: killed server PID {serverProcess.Id}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"TryKillServerProcess: failed to kill server PID {serverProcess.Id}: {ex.Message}");
+        }
+        finally
+        {
+            serverProcess.Dispose();
+            serverProcess = null;
+            serverJob?.Dispose();
+            serverJob = null;
+        }
     }
 
     // Drag the borderless window by its top grip strip.
@@ -226,9 +328,7 @@ public class OverlayForm : Form
         base.WndProc(ref m);
         if (m.Msg == WM_EXITSIZEMOVE)
         {
-            settings.X = Location.X;
-            settings.Y = Location.Y;
-            settings.Save();
+            SavePosition("drag end");
         }
     }
 }
